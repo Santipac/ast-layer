@@ -1,0 +1,22 @@
+{
+  "common": {
+    "save": "Guardar",
+    "cancel": "Cancelar",
+    "delete": "Eliminar",
+    "edit": "Editar",
+    "close": "Cerrar",
+    "back": "Volver",
+    "next": "Siguiente",
+    "search": "Buscar",
+    "loading": "Cargando…",
+    "error": "Ocurrió un error"
+  },
+  "auth": {
+    "login": "Ingresar",
+    "logout": "Salir"
+  },
+  "cart": {
+    "title": "Tu carrito",
+    "empty": "El carrito está vacío"
+  }
+}

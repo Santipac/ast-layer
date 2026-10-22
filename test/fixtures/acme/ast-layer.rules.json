@@ -1,0 +1,9 @@
+{
+  "rules": [
+    { "id": "apps-no-cross-import", "from": "apps/*", "to": "apps/*", "allow": false, "message": "Apps do not import from each other; use @acme/ui." },
+    { "id": "no-legacy", "from": "*", "to": "@acme/legacy-ui", "allow": false, "except": ["apps/mobile", "apps/shop"] },
+    { "id": "ui-no-utils-internals", "from": "@acme/ui", "toSpecifier": "@acme/utils/src/**", "allow": false },
+    { "id": "libs-no-apps", "from": "packages/*", "to": "apps/*", "allow": false, "message": "Libraries do not depend on apps." },
+    { "id": "libs-no-app-types", "from": "packages/*", "to": "apps/*", "allow": false, "includeTypeOnly": true }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+ "name": "shop",
+ "dependencies": {
+  "@acme/utils": "workspace:*",
+  "react": "^18.2.0",
+  "@acme/theme": "workspace:*",
+  "@acme/legacy-ui": "workspace:*"
+ }
+}

@@ -1,0 +1,26 @@
+{
+  "name": "ast-layer",
+  "version": "1.2.1",
+  "private": true,
+  "description": "Deterministic, read-only JS/TS analysis for coding agents, packaged as a Claude Code plugin.",
+  "license": "MIT",
+  "author": "Santiago Pacini",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "build": "esbuild src/main.js --bundle --platform=node --format=cjs --target=node18 --outfile=plugin/dist/ast-layer.cjs --log-level=warning --legal-comments=none --metafile=node_modules/.ast-layer-meta.json && node scripts/third-party-licenses.mjs node_modules/.ast-layer-meta.json plugin/dist/THIRD_PARTY_LICENSES.txt"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "postcss": "^8.5.31",
+    "postcss-scss": "^4.0.9",
+    "typescript": "^5.9.3",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  }
+}

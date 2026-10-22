@@ -1,0 +1,1 @@
+{ "name": "@acme/legacy-ui", "exports": { ".": { "import": "./dist/index.mjs", "types": "./dist/index.d.ts" } } }

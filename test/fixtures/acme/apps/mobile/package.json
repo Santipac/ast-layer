@@ -1,0 +1,1 @@
+{ "name": "mobile", "dependencies": { "react-native": "0.76.0", "@acme/crypto": "workspace:*" } }
