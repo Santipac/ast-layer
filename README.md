@@ -4,7 +4,30 @@ A deterministic AST layer for coding agents, packaged as a Claude Code plugin.
 
 It analyzes one or more JS/TS repositories (monorepos, micro-frontends, shared libraries) and gives Claude **facts with exact locations**: code duplicated across packages, copies of library exports, imports that bypass a package's public entry, cycles, Module Federation contracts, and your own architecture rules. Each finding has a class (`provable`, `agent-guided` or `manual-review`) that tells the agent what it may do with it. The class is decided before the model sees the code.
 
-What it detects and how to use it is in [`plugin/README.md`](plugin/README.md). Changes by version are in [`CHANGELOG.md`](CHANGELOG.md).
+## Features
+
+**What it finds** (details and every finding kind in [`plugin/README.md`](plugin/README.md#what-it-detects)):
+- **Copies of library exports:** local code that a workspace library already exports, resolved through re-export chains, with the exact import to use instead.
+- **Duplicates across packages and micro-frontends:** identical, near-identical (one literal differs) and similar code (80% shared structure, 60% with the same name), whole copied modules, and a candidate shared home for each group.
+- **Package boundaries:** deep or relative imports that skip another package's public entry.
+- **Architecture:** runtime cycles between packages, your own import rules (`ast-layer.rules.json`), version drift of shared dependencies, packages with the same name.
+- **Module Federation:** imports of modules a remote does not expose, exposes that point to missing files.
+- **CSS and i18n:** custom properties, rule blocks and locale messages copied across packages.
+
+**How Claude uses it:**
+- **Each finding has a class** decided before the model sees the code: `provable` (apply the next action exactly), `agent-guided` (check the listed difference first) or `manual-review` (present the decision; do not edit).
+- **At session start**, a hook scans the workspace (or reuses an unchanged scan) and gives Claude a short note: provable findings, duplicates with their class, names that already exist in several packages, and the rules for acting on them.
+- **After every edit**, a hook compares the new code with the index and warns in the same turn when it copies existing code, reuses an existing name or breaks an architecture rule. Files outside the project, tests the scan leaves out, parity tests and paths you chose to ignore are skipped.
+- **MCP tools:** `search_names` and `find_equivalent` ("does this already exist?"), `findings` / `finding`, `package_graph`, `propose_fix`, `pr_findings`, `record_decision`, `record_ignore`, `stats`.
+- **Verified fixes:** `propose_fix` returns a diff for provable findings that has been checked in memory with TypeScript: no new diagnostics, the finding disappears, no new finding appears. It never writes; Claude applies it.
+- **PR mode:** the findings a branch introduces compared with a git ref, as markdown or JSON, with `--fail-on` for CI.
+- **Decisions remembered:** "keep these separate", "false positive" or "ignore these files" are recorded once (in the repo, shared through git, or only for you) and not raised again until the code changes.
+- **Planning:** the `/ast-layer:plan-task` skill and the `task-scout` subagent check what already exists before writing a feature.
+- **Local telemetry:** `stats` shows what the hooks warned about and whether each warned copy was removed, kept or its file deleted. Nothing leaves the machine.
+
+**Guarantees:** read-only analysis, no network, no running the project's code or its `node_modules`, deterministic output (two scans give byte-identical reports), and Node.js found even when it is not on Claude Code's `PATH`.
+
+Changes by version are in [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Installation
 
