@@ -19,7 +19,8 @@ const tmp = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
 function treeHash(dir) {
   const h = crypto.createHash("sha256");
   const walk = (d) => {
-    for (const e of fs.readdirSync(d, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+    // .git is left out: git itself rewrites it (index, background maintenance locks).
+    for (const e of fs.readdirSync(d, { withFileTypes: true }).filter((e) => e.name !== ".git").sort((a, b) => a.name.localeCompare(b.name))) {
       const p = path.join(d, e.name);
       const st = fs.statSync(p);
       h.update(path.relative(dir, p) + "\0" + st.mode + "\0" + st.mtimeMs + "\0");
@@ -642,7 +643,7 @@ function gitRepoFromFixture() {
   const proj = fs.mkdtempSync(path.join(os.tmpdir(), "al-pr-"));
   const root = path.join(proj, "acme");
   fs.cpSync(FIXTURE, root, { recursive: true });
-  const g = (...a) => execFileSync("git", ["-C", root, "-c", "user.name=t", "-c", "user.email=t@t", ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  const g = (...a) => execFileSync("git", ["-C", root, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "maintenance.auto=false", "-c", "gc.auto=0", ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
   g("init", "-q", "-b", "main"); g("add", "-A"); g("commit", "-qm", "base");
   return { root, g };
 }
