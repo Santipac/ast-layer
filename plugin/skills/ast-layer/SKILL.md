@@ -23,6 +23,7 @@ The MCP tools may be deferred. If you only see their names, load them first with
 | `pr_findings` | Which findings does this change introduce, compared with a git ref (default `origin/main`) or a saved report? Use before opening or reviewing a PR. |
 | `stats` | Local hook telemetry (sessions, warnings by type, whether warned copies were removed). Only when the user asks how the plugin is doing. |
 | `record_decision` | Only when the user asks to remember a decision about a finding (keep-separate, extract-later, accepted-copy, false-positive). |
+| `record_ignore` | Only when the user asks to stop analyzing files that copy code on purpose (parity tests, fixtures, generated code): one path pattern, recorded once. |
 
 ## 1. Before writing new code
 
@@ -62,6 +63,8 @@ Record a decision with `record_decision` **only when the user asks for it**, wit
 - `scope: "repo"` (default) writes `ast-layer.decisions.json` at the repository root, so it is shared with the team through git. Say so.
 - `scope: "user"` keeps it private.
 
+If edit warnings keep coming for a file that copies code on purpose (a parity test, a fixture, generated code), say so and offer `record_ignore` with a path pattern; record it only when the user agrees. Files outside the project, `*.parity.test.*` and, while the scan leaves tests out, test files are already skipped.
+
 **Engram (optional).** If the session has Engram memory tools (`mem_save` / `mem_search`, e.g. `mcp__engram__mem_save` or `mcp__plugin_engram_engram__mem_save`):
 - after recording a decision, also call `mem_save` with `topic_key: "ast-layer/decision/<findingKey>"`, the decision and the note;
 - before planning a task, call `mem_search` with `ast-layer/decision` and the names involved.
@@ -74,7 +77,7 @@ Cite findings by id and `file:line`. Keep facts from the tool separate from your
 
 ## CLI fallback
 
-If the MCP server is not available, the same facts come from the bundled CLI (`node "${CLAUDE_PLUGIN_ROOT}/dist/ast-layer.cjs" <command>`):
+If the MCP server is not available, the same facts come from the bundled CLI (`sh "${CLAUDE_PLUGIN_ROOT}/bin/ast-layer" <command>`, which finds Node.js even when it is not on the PATH):
 
 | Command | Does |
 |---|---|
@@ -84,4 +87,5 @@ If the MCP server is not available, the same facts come from the bundled CLI (`n
 | `fix <id-or-key> --out .ast-layer` | Verified diff for a provable finding (never writes). |
 | `pr --base origin/main` | Findings this branch introduces (markdown; `--format json`, `--fail-on`). |
 | `decide <key> --decision keep-separate --note "…"` | Record a decision, only when the user asks. |
+| `ignore "<glob>" --note "…"` | Leave a path pattern out of scans and edit warnings, only when the user asks. |
 | `stats --since 7d` | Local hook telemetry. |

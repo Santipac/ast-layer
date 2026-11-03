@@ -5,6 +5,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import { ignoreFor, ignoredBy } from "./ignore.js";
 
 export const SOURCE_EXT = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts"];
 // Files we see but cannot analyze; counted and reported as a limit.
@@ -70,7 +71,7 @@ function readJson(abs) {
  * from the directory name, so a temporary copy of a repo (PR mode) produces the
  * same file keys as the repo itself.
  */
-export function discover(rootPaths, { includeTests = false, rootLabels = null } = {}) {
+export function discover(rootPaths, { includeTests = false, rootLabels = null, applyIgnore = true } = {}) {
   const roots = [];
   const seenLabels = new Map();
   for (const [i, r] of rootPaths.entries()) {
@@ -94,6 +95,7 @@ export function discover(rootPaths, { includeTests = false, rootLabels = null } 
 
   for (const root of roots) {
     const { files: all, source } = listFiles(root.abs);
+    const ignore = applyIgnore ? ignoreFor(root.abs) : [];
     listing.push({ root: root.label, source, files: all.length });
     const inExcludedDir = (abs) => posix(path.relative(root.abs, abs)).split("/").slice(0, -1).some((seg) => EXCLUDED_DIRS.includes(seg));
 
@@ -123,6 +125,7 @@ export function discover(rootPaths, { includeTests = false, rootLabels = null } 
       const ext = path.extname(abs).toLowerCase();
       const rel = posix(path.relative(root.abs, abs));
       if (CONFIG_FILE_RE.test(rel) && !inExcludedDir(abs)) configFiles.push({ abs, key: `${root.label}/${rel}` });
+      if (ignoredBy(ignore, rel)) { if (SOURCE_EXT.includes(ext) || STYLE_EXT.includes(ext) || isLocaleFile(rel)) bump(skipped.byReason, "ignored path (built-in parity tests or `ignore` in ast-layer.decisions.json)"); continue; }
       if (KNOWN_UNSUPPORTED.includes(ext)) { bump(skipped.byExt, ext); continue; }
       const asset = STYLE_EXT.includes(ext) ? styleFiles : isLocaleFile(rel) ? localeFiles : null;
       if (asset) {

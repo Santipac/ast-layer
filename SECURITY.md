@@ -14,6 +14,7 @@ The plugin runs on your machine, with your permissions, inside Claude Code, and 
   - a temporary directory for PR mode, removed afterwards.
 - **No code from the project is executed, its `node_modules` is not loaded, and there is no network access.**
 - **Processes are started with `execFile`/`spawn`, with argument arrays and no shell.** Git refs given to PR mode are refused when they start with `-`, and are resolved to a SHA before use.
+- **The launcher (`plugin/bin/ast-layer`) is the only shell script.** It takes no input from the analyzed repository or from the model: it reads `AST_LAYER_NODE`, the PATH, fixed install locations and its own cache in the plugin data directory, and as a last resort runs the user's own shell to ask where `node` is. It passes its arguments to Node.js unchanged (`exec "$node" bundle "$@"`).
 - **Globs in `ast-layer.rules.json` are matched without regular expressions,** so a hostile pattern cannot hang the analysis. The schema caps their size.
 - **A symlink in the repository that points outside the root is not read.**
 - **Known limit:** tool responses include text from the analyzed repository (names, paths, rule messages). A hostile repository may try to place instructions there, as in any file the agent reads.

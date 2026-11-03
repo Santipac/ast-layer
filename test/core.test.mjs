@@ -56,7 +56,7 @@ test("analysis runs with filesystem writes forbidden", () => {
 });
 
 test("analysis modules have no write path (static check)", () => {
-  for (const f of ["analyze.js", "discover.js", "program.js", "fingerprint.js", "cache.js", "rules.js", "decisions.js", "assets.js", "fix.js", "stats.js"]) {
+  for (const f of ["analyze.js", "discover.js", "ignore.js", "program.js", "fingerprint.js", "cache.js", "rules.js", "decisions.js", "assets.js", "fix.js", "stats.js"]) {
     const src = fs.readFileSync(path.join(here, "..", "src", f), "utf8");
     assert.doesNotMatch(src, /(from|import)\s*\(?\s*["'][^"']*writer(\.js)?["']/, `${f} imports the writer`);
     assert.doesNotMatch(src, /\b(writeFile|appendFile|mkdir|rmSync|unlink|renameSync|createWriteStream)\w*\(/, `${f} calls a write API`);
@@ -879,8 +879,111 @@ test("stats: sessions, warnings by type, and whether each warned copy was remove
   assert.equal(st.warningsByType.similar, 1);
   assert.ok(st.warningsByType["architecture-rule"] >= 1);
   assert.deepEqual(st.details.map((d) => [d.unit, d.outcome]), [["useDebounce", "warning followed"], ["getMe", "copy kept"]]);
-  assert.deepEqual(st.outcomes, { followed: 1, kept: 1, unknown: 0 });
+  assert.deepEqual(st.outcomes, { followed: 1, fileDeleted: 0, kept: 1, unknown: 0 });
   const text = spawnSync(process.execPath, [CLI, "stats"], { env: { ...process.env, CLAUDE_PLUGIN_DATA: data }, encoding: "utf8" }).stdout;
   assert.match(text, /nothing is sent anywhere/);
-  assert.match(text, /1 warning followed \(the unit is gone\), 1 copy kept/);
+  assert.match(text, /1 warning followed \(the unit was removed from the file\), 0 file deleted \(not counted as followed\), 1 copy kept/);
+});
+
+// 1.3: noise from files that copy on purpose, and stats that tell deletion apart.
+const lastLog = (data) => { const l = fs.readFileSync(path.join(data, "hook-log.jsonl"), "utf8").trim().split("\n").map(JSON.parse); return l[l.length - 1]; };
+
+test("post-edit: files outside the project (scratchpads) are not compared, and no scan starts for them", () => {
+  const { root, data } = freshProject();
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "al-scratch-"));
+  const f = path.join(scratch, "strip.ts");
+  fs.copyFileSync(path.join(root, "apps/shop/src/hooks.ts"), f);
+  assert.equal(hook("hook-post-edit", root, data, { tool_name: "Write", tool_input: { file_path: f } }).stdout, "");
+  assert.ok(!fs.existsSync(path.join(data, "scans")), "no index is built for a file outside the project");
+  assert.equal(lastLog(data).skipped, "outside the analyzed roots");
+  // With an index, too.
+  hook("hook-session-start", root, data, { source: "startup" });
+  assert.equal(hook("hook-post-edit", root, data, { tool_name: "Write", tool_input: { file_path: f } }).stdout, "");
+  assert.equal(lastLog(data).skipped, "outside the analyzed roots");
+});
+
+test("post-edit: parity tests and tests the scan leaves out are not compared", () => {
+  const { root, data } = freshProject();
+  hook("hook-session-start", root, data, { source: "startup" });
+  const src = fs.readFileSync(path.join(root, "apps/shop/src/hooks.ts"), "utf8");
+  // A parity test next to the source (not under a tests/ directory).
+  const parity = path.join(root, "apps/blog/src/useDebounce.parity.test.ts");
+  fs.writeFileSync(parity, src);
+  assert.equal(hook("hook-post-edit", root, data, { tool_name: "Write", tool_input: { file_path: parity } }).stdout, "");
+  assert.equal(lastLog(data).skipped, "test file (the scan leaves tests out)");
+  const spec = path.join(root, "apps/blog/src/__tests__/copy.ts");
+  fs.mkdirSync(path.dirname(spec), { recursive: true });
+  fs.writeFileSync(spec, src);
+  assert.equal(hook("hook-post-edit", root, data, { tool_name: "Write", tool_input: { file_path: spec } }).stdout, "");
+  // With tests included, a parity test is still left out (built-in pattern), by the scan as well.
+  const out = path.join(root, ".al-with-tests");
+  const withTests = runScan([root], { out, includeTests: true });
+  assert.ok(!withTests.report.findings.some((x) => x.locations.some((l) => l.file.endsWith(".parity.test.ts"))));
+  assert.ok(withTests.report.limits.some((l) => /ignored path/.test(l)));
+  assert.equal(hook("hook-post-edit", root, data, { tool_name: "Write", tool_input: { file_path: parity }, }).stdout, "");
+});
+
+test("ignore: recorded once, it silences the hook and the scan for matching paths and keeps the decisions", () => {
+  const { root, data } = freshProject();
+  hook("hook-session-start", root, data, { source: "startup" });
+  const out = scanDirOf(data);
+  const f = loadOut(out).report.findings.find((x) => x.kind === "duplicate.cross-package" && x.evidence.members.some((m) => m.name === "useDebounce"));
+  assert.equal(cli(["decide", f.key, "--decision", "keep-separate", "--out", out], root, data).status, 0);
+  const legacy = path.join(root, "apps/blog/src/kept-copies/useDebounce.ts");
+  fs.mkdirSync(path.dirname(legacy), { recursive: true });
+  fs.copyFileSync(path.join(root, "apps/shop/src/hooks.ts"), legacy);
+  assert.match(hook("hook-post-edit", root, data, { tool_name: "Write", tool_input: { file_path: legacy } }).stdout, /record_ignore/);
+  const r = cli(["ignore", "apps/*/src/kept-copies/**", "--note", "old copies kept for comparison", "--root", root], root, data);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /matches 1 file\(s\) now: apps\/blog\/src\/kept-copies\/useDebounce\.ts/);
+  const file = JSON.parse(fs.readFileSync(path.join(root, "ast-layer.decisions.json"), "utf8"));
+  assert.equal(file.decisions.length, 1, "the decision is kept");
+  assert.deepEqual(file.ignore.map((g) => [g.glob, g.note]), [["apps/*/src/kept-copies/**", "old copies kept for comparison"]]);
+  assert.equal(hook("hook-post-edit", root, data, { tool_name: "Edit", tool_input: { file_path: legacy } }).stdout, "");
+  assert.match(lastLog(data).skipped, /^ignored path \(apps\/\*\/src\/kept-copies\/\*\*, repo\)$/);
+  // The next scan leaves the file out, and a new decision keeps the ignore list.
+  const rep = runScan([root], { out: path.join(root, ".al-ignore") }).report;
+  assert.ok(!rep.findings.some((x) => x.locations.some((l) => l.file.includes("/kept-copies/"))));
+  assert.equal(cli(["decide", f.key, "--decision", "extract-later", "--out", out], root, data).status, 0);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(root, "ast-layer.decisions.json"), "utf8")).ignore.length, 1);
+  // Recording it again (a new note) replaces it and still counts the files it covers.
+  assert.match(cli(["ignore", "apps/*/src/kept-copies/**", "--note", "new note", "--root", root], root, data).stdout, /matches 1 file\(s\) now/);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(root, "ast-layer.decisions.json"), "utf8")).ignore.map((g) => g.note), ["new note"]);
+  // A pattern that would ignore everything is refused.
+  assert.notEqual(cli(["ignore", "**", "--root", root], root, data).status, 0);
+});
+
+test("stats: a deleted file is not a followed warning; old warnings about files outside the project are left out", async () => {
+  const { computeStats } = await import("../src/stats.js");
+  const { root } = freshProject();
+  const at = new Date().toISOString();
+  const warned = (file) => ({ hook: "post-edit", at, project: root, file, emitted: true, units: [{ name: "useDebounce", exact: "x" }], warned: [{ unit: "useDebounce", type: "structural", exact: "x" }] });
+  const st = computeStats([
+    warned("apps/blog/src/gone.ts"),
+    warned("../../tmp/scratchpad/strip.js"),
+    { hook: "post-edit", at, project: root, file: "apps/blog/src/a.parity.test.ts", skipped: "test file (the scan leaves tests out)" },
+  ]);
+  assert.deepEqual(st.outcomes, { followed: 0, fileDeleted: 1, kept: 0, unknown: 0 });
+  assert.equal(st.warningsOutsideProject, 1);
+  assert.equal(st.warningsEmitted, 1);
+  assert.deepEqual(st.postEditSkipped, { "test file (the scan leaves tests out)": 1 });
+  assert.equal(st.details[0].outcome, "file deleted");
+});
+
+test("plugin launcher: MCP and hooks do not depend on node being on the PATH", () => {
+  const plugin = path.join(here, "..", "plugin");
+  for (const f of [".mcp.json", "hooks/hooks.json"]) {
+    const text = fs.readFileSync(path.join(plugin, f), "utf8");
+    assert.doesNotMatch(text, /"command":\s*"node"/, `${f} runs bare node`);
+    assert.match(text, /"\/bin\/sh"[\s\S]*\$\{CLAUDE_PLUGIN_ROOT\}\/bin\/ast-layer/);
+  }
+  const launcher = path.join(plugin, "bin", "ast-layer");
+  const data = fs.mkdtempSync(path.join(os.tmpdir(), "al-data-"));
+  const env = { HOME: os.tmpdir(), PATH: "/usr/bin:/bin", AST_LAYER_NODE: process.execPath, CLAUDE_PLUGIN_DATA: data };
+  const r = spawnSync("/bin/sh", [launcher, "hook-post-edit"], { env, input: "{}", encoding: "utf8" });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(fs.readFileSync(path.join(data, "node-path"), "utf8").trim(), process.execPath);
+  // An unusable AST_LAYER_NODE falls through to the other places; a hook never fails the session.
+  const bad = spawnSync("/bin/sh", [launcher, "hook-post-edit"], { env: { ...env, AST_LAYER_NODE: "/nonexistent/node" }, input: "{}", encoding: "utf8" });
+  assert.equal(bad.status, 0, bad.stderr);
 });

@@ -6,6 +6,7 @@
 //   fix <finding-id-or-key> [--json]   (verified diff for a provable finding; never writes)
 //   pr [root] (--base <git-ref> | --baseline report.json) [--format md|json] [--fail-on classes] [--max N]
 //   decide <finding-key> --decision keep-separate|extract-later|accepted-copy|false-positive [--note n] [--scope repo|user]
+//   ignore <glob> [--note n] [--scope repo|user] [--root dir]   (leave matching paths out of scans and edit warnings)
 //   hook-session-start        (Claude Code SessionStart hook: scan + short digest into context)
 //   hook-post-edit            (Claude Code PostToolUse hook; reads JSON on stdin)
 import fs from "node:fs";
@@ -25,6 +26,7 @@ import { fingerprintStandalone } from "./fingerprint.js";
 import { prFindings, prMarkdown } from "./pr.js";
 import { proposeFix } from "./fix.js";
 import { readHookLog, computeStats, statsText } from "./stats.js";
+import { ignoreFor, ignoredBy, globMatchesPath } from "./ignore.js";
 
 const MAX_FILES = () => Number(process.env.AST_LAYER_MAX_FILES || 20000);
 
@@ -208,18 +210,48 @@ export function recordDecision({ out, findingKey, decision, note = "", scope = "
   if (!root) throw new Error(`cannot tell which root ${f.locations[0].file} belongs to`);
   const file = scope === "user" ? userDecisionsFile(root.abs) : path.join(root.abs, DECISIONS_FILE);
   if (!file) throw new Error("scope user needs the plugin data directory (CLAUDE_PLUGIN_DATA); use scope repo");
-  let current = [];
-  if (fs.existsSync(file)) {
-    const parsed = parseDecisions(fs.readFileSync(file, "utf8"), file, scope);
-    if (parsed.problems.length) throw new Error(`${parsed.problems[0]} Fix or remove it first; it was not overwritten.`);
-    current = parsed.decisions.map(({ scope: _s, ...d }) => d);
-  }
+  const { decisions: current, ignore } = readDecisionsFile(file, scope);
   // A new decision replaces the one for the same key and any outdated one for the same finding.
   const kept = current.filter((d) => d.findingKey !== f.key && d.anchor !== f.anchor);
   const entry = { findingKey: f.key, anchor: f.anchor, kind: f.kind, decision, ...(note ? { note } : {}), about: f.why.length > 200 ? f.why.slice(0, 199) + "…" : f.why, recordedAt: new Date().toISOString().slice(0, 10) };
   const decisions = [...kept, entry].sort((a, b) => a.findingKey.localeCompare(b.findingKey));
-  writeFileAtomic(file, JSON.stringify({ version: 1, decisions }, null, 2) + "\n");
+  writeDecisionsFile(file, decisions, ignore);
   return { file, scope, entry, replaced: current.length - kept.length };
+}
+
+/** The decisions and ignore patterns of a decisions file, without their scope (to write it back). */
+function readDecisionsFile(file, scope) {
+  if (!fs.existsSync(file)) return { decisions: [], ignore: [] };
+  const parsed = parseDecisions(fs.readFileSync(file, "utf8"), file, scope);
+  if (parsed.problems.length) throw new Error(`${parsed.problems[0]} Fix or remove it first; it was not overwritten.`);
+  const strip = ({ scope: _s, ...d }) => d;
+  return { decisions: parsed.decisions.map(strip), ignore: parsed.ignore.map(strip) };
+}
+
+function writeDecisionsFile(file, decisions, ignore) {
+  writeFileAtomic(file, JSON.stringify({ version: 1, decisions, ...(ignore.length ? { ignore } : {}) }, null, 2) + "\n");
+}
+
+/**
+ * Record a path pattern that scans and the post-edit hook leave out (files that
+ * copy code on purpose: parity tests, fixtures, generated code). Same files and
+ * scopes as decisions; only when the user asks for it.
+ */
+export function recordIgnore({ rootAbs, glob, note = "", scope = "repo" }) {
+  const g = String(glob || "").trim().replace(/^\.\//, "");
+  if (!g || g.length > 300) throw new Error("glob must be 1-300 characters");
+  if (/^[*/]+$/.test(g)) throw new Error(`"${g}" would ignore every file; name the files to leave out (for example "*.parity.test.*" or "packages/legacy/**")`);
+  if (scope !== "repo" && scope !== "user") throw new Error("scope must be repo or user");
+  const file = scope === "user" ? userDecisionsFile(rootAbs) : path.join(rootAbs, DECISIONS_FILE);
+  if (!file) throw new Error("scope user needs the plugin data directory (CLAUDE_PLUGIN_DATA); use scope repo");
+  const { decisions, ignore } = readDecisionsFile(file, scope);
+  // What the pattern covers now, so a typo that matches nothing is visible.
+  const disc = withWritesForbidden(() => discover([rootAbs], { includeTests: true, applyIgnore: false }));
+  const rels = [...disc.files, ...disc.styleFiles, ...disc.localeFiles].map((f) => f.rel).filter((rel) => globMatchesPath(g, rel)).sort();
+  const entry = { glob: g, ...(note ? { note } : {}), recordedAt: new Date().toISOString().slice(0, 10) };
+  const kept = ignore.filter((x) => x.glob !== g);
+  writeDecisionsFile(file, decisions, [...kept, entry].sort((a, b) => a.glob.localeCompare(b.glob)));
+  return { file, scope, entry, replaced: ignore.length - kept.length, matches: rels.length, examples: rels.slice(0, 5) };
 }
 
 async function readStdin() {
@@ -289,6 +321,12 @@ export async function main() {
     console.log(`ast-layer: recorded "${r.entry.decision}" for ${r.entry.findingKey} (${r.entry.kind}) in ${r.file}${r.replaced ? `, replacing ${r.replaced} earlier decision(s)` : ""}. It applies from the next scan.`);
     return;
   }
+  if (cmd === "ignore") {
+    if (!pos[0]) throw new Error('usage: ast-layer ignore <glob> [--note "..."] [--scope repo|user] [--root dir]');
+    const r = recordIgnore({ rootAbs: path.resolve(typeof flags.root === "string" ? flags.root : projectDir()), glob: pos[0], note: typeof flags.note === "string" ? flags.note : "", scope: flags.scope || "repo" });
+    console.log(`ast-layer: scans and edit warnings now leave out "${r.entry.glob}" (${r.file}). It matches ${r.matches} file(s) now${r.examples.length ? `: ${r.examples.join(", ")}${r.matches > r.examples.length ? ", ..." : ""}` : ""}.`);
+    return;
+  }
   if (cmd === "equivalent") {
     const { index, meta, report } = loadOut(out);
     let code; let fileName = "snippet.tsx"; let excludeFile = null;
@@ -335,10 +373,15 @@ export async function main() {
       if (!file || !/\.[cm]?[jt]sx?$/.test(file) || /\.d\.[cm]?ts$/.test(file)) return;
       const project = projectDir(input.cwd);
       const outDir = flags.out ? path.resolve(project, flags.out) : outDirFor(project);
+      const absEdited = path.resolve(project, file);
+      const relEdited = path.relative(project, absEdited);
+      const outsideProject = relEdited.startsWith("..") || path.isAbsolute(relEdited);
+      const skip = (reason) => hookLog({ hook: "post-edit", project, file: outsideProject ? absEdited : relEdited, skipped: reason });
       // No scan yet (e.g. a fresh workspace): build the index now. It already
       // contains this edit, so there is no "before" for this file: compare all of it.
       let fresh = false;
       if (!fs.existsSync(path.join(outDir, "index.json"))) {
+        if (outsideProject) return skip("outside the analyzed roots");
         const r = autoScan(project, outDir);
         if (r.skipped) return;
         fresh = true;
@@ -348,6 +391,14 @@ export async function main() {
       if (!fs.existsSync(abs)) return;
       const code = fs.readFileSync(abs, "utf8");
       const key = keyForFile(meta, abs);
+      // Files the index does not cover are not compared: scratch files outside
+      // the project, tests when the scan leaves tests out, ignored paths.
+      if (!key) return skip("outside the analyzed roots");
+      const root = meta.roots.find((r) => key.startsWith(r.label + "/"));
+      const relInRoot = key.slice(root.label.length + 1);
+      if (!report.options.includeTests && TEST_RE.test(relInRoot)) return skip("test file (the scan leaves tests out)");
+      const ign = ignoredBy(ignoreFor(root.abs), relInRoot);
+      if (ign) return skip(`ignored path (${ign.glob}, ${ign.scope})`);
       // The index no longer matches this file: the next scan must not reuse it.
       if (!fresh && key) markStale(outDir, key);
       const editedPackage = packageForKey(index, key);
@@ -381,10 +432,11 @@ export async function main() {
       }
       for (const b of breaks) lines.push(`\`"${b.imp.spec}"\` (line ${b.imp.line}) breaks architecture rule ${b.rule.text} from ast-layer.rules.json${b.rule.message ? `: ${b.rule.message}` : "."} ast-layer rule for this case: the rules file is the team's decision; remove this import and take the code from where the rule allows, or ask the user before keeping it.`);
       for (const m of byName) lines.push(`\`${m.name}\` has the same name as existing exported definitions: ${m.existing.map((e) => `${e.where} (${e.package}${e.public.length ? `; public export ${e.public[0]}` : ""})`).join(", ")}. Same name only; the structure differs, so check whether it is the same behavior. If it is, the ast-layer rules apply: import a public export, or ask the user before adding another copy.`);
-      process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: lines.join("\n").slice(0, 9500) } }));
+      const hint = "If this file copies code on purpose (a parity test, a fixture, generated code), tell the user: they can have it left out once with `record_ignore` and a path pattern, instead of getting this warning on every edit. Do not record it on your own.";
+      process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: `${lines.join("\n").slice(0, 9200)}\n${hint}` } }));
     } catch { /* silent by design */ }
     return;
   }
-  console.log("usage: ast-layer <scan|findings|equivalent|fix|pr|decide|stats|hook-session-start|hook-post-edit|mcp> ...");
+  console.log("usage: ast-layer <scan|findings|equivalent|fix|pr|decide|ignore|stats|hook-session-start|hook-post-edit|mcp> ...");
   process.exitCode = cmd ? 1 : 0;
 }

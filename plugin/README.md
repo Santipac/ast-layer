@@ -10,6 +10,10 @@ A deterministic, read-only layer between the agent and JS/TS code. It turns one 
 
 The class is decided **before** the model sees the code, and the agent cannot upgrade it.
 
+```
+/plugin install ast-layer --marketplace Santipac/ast-layer
+```
+
 ## What it detects
 
 - **`duplicate.reinvents-library-export`**: a local copy of something a workspace library already exports. The public API is computed by following re-export chains to the original declaration.
@@ -43,6 +47,16 @@ When the user decides something about a finding ("these copies stay separate", "
 - **Effect:** the finding gets `status: "decided"` and leaves the session note and `findings` (unless `includeDecided`); post-edit warnings mention the decision instead of proposing an extraction again.
 - **When the finding's code changes, its `key` changes:** the decision stops applying and the finding comes back with `previousDecision.outdated`.
 - **Engram, optional:** when the session has its tools, the agent also saves the decision under the topic key `ast-layer/decision/<key>` and searches for it before planning.
+
+### Files that copy code on purpose
+
+Some files duplicate code by design: a parity test keeps the old implementation to compare it with the shared one, a fixture or generated file repeats code. Warning about them on every edit is noise, so they are left out:
+
+- **Always:** files outside the analyzed roots (scratch files in a temp directory), and `*.parity.test.*` / `*.parity.spec.*`.
+- **Tests, while the scan leaves tests out** (the default): the post-edit hook does not compare them either, so the hook and the index agree.
+- **Any path pattern, recorded once:** when the user says so, the agent calls `record_ignore`, or you run `ast-layer ignore <glob> [--note …] [--scope repo|user]`. It goes into the same `ast-layer.decisions.json` (or the user file), under `ignore`. A pattern without `/` matches the file name in any directory (`*.snapshot.ts`); one with `/` matches the path from the root (`packages/*/legacy/**`). The answer says how many files it matches now, so a typo is visible. Scans and the post-edit hook leave those files out from then on.
+
+Post-edit warnings end by saying this is possible; the agent asks the user instead of recording it on its own.
 
 ### Your own architecture rules
 
@@ -85,7 +99,7 @@ Violations appear:
 
 ## Installation
 
-Requires Node.js 18 or later on the `PATH`. The analyzer is bundled in `dist/ast-layer.cjs`, so no `npm install` is needed.
+Requires Node.js 18 or later; it does not have to be on the `PATH` (see [Node.js](#nodejs)). The analyzer is bundled in `dist/ast-layer.cjs`, so no `npm install` is needed.
 
 ```bash
 claude --plugin-dir ./plugin        # try it locally
@@ -106,6 +120,7 @@ To keep it installed or share it with a team, add it to a plugin marketplace.
   - `propose_fix`: the verified diff for a provable finding. It never writes.
   - `pr_findings`: the findings a change introduces, compared with a git ref or a saved report.
   - `record_decision`: records a decision about a finding, only when the user asks.
+  - `record_ignore`: records a path pattern that scans and edit warnings leave out, only when the user asks.
   - `stats`: local hook telemetry.
 - **Skill `ast-layer`**: tells Claude when to use the layer and how to act on each class.
 - **Skill `/ast-layer:plan-task <task>`**: builds a fact-based implementation plan. For each piece it decides between reusing, exposing an existing copy, extracting, or writing something new.
@@ -128,9 +143,20 @@ To keep it installed or share it with a team, add it to a plugin marketplace.
   - sessions, and how many reused the scan;
   - post-edit warnings by type (structural, similar, same-name, architecture-rule);
   - the files warned;
-  - the outcome of each warning: "warning followed" when the warned unit is gone at the next edit of that file (or from the file on disk when queried), or "copy kept".
+  - the outcome of each warning: "warning followed" when the warned unit was removed at the next edit of that file (or from the file on disk when queried), "copy kept", or "file deleted". A deleted file is not counted as a followed warning: scratch files and throwaway tests are deleted whether or not the warning was read;
+  - post-edit runs skipped, by reason (outside the project, a test the scan leaves out, an ignored path). Warnings about files outside the project logged by earlier versions are counted apart and left out of the outcomes.
 
   Everything stays local; nothing is sent anywhere.
+
+### Node.js
+
+The MCP server and the hooks start through `plugin/bin/ast-layer`, a POSIX `sh` launcher, not through `node` on the PATH. A Claude Code started from the Dock, an IDE or a service often does not see the `node` that nvm, fnm, volta, asdf or mise set up in your shell. The launcher looks, in order, at `AST_LAYER_NODE`, the PATH, the path it found last time (cached in the plugin's data directory), Homebrew and the usual install locations (volta, mise, asdf, nodenv, fnm, n, and the newest nvm version), and finally your login and interactive shell. It needs Node.js 18 or later. If none is found, the MCP server reports it and the hooks stay silent; set `AST_LAYER_NODE` in the `env` of `~/.claude/settings.json`:
+
+```json
+{ "env": { "AST_LAYER_NODE": "/path/to/node" } }
+```
+
+Windows: the launcher needs `/bin/sh`, so use Claude Code from WSL.
 
 Troubleshooting: the index is keyed by the project's real path. If you replay a hook through a symlink to the workspace, the path changes and the hook scans again.
 
@@ -144,6 +170,7 @@ node plugin/dist/ast-layer.cjs equivalent --file src/utils/price.ts
 node plugin/dist/ast-layer.cjs fix <id-or-key>                     # verified diff (does not write)
 node plugin/dist/ast-layer.cjs pr --base origin/main               # findings the branch introduces
 node plugin/dist/ast-layer.cjs decide <key> --decision keep-separate --note "each app owns its hook"
+node plugin/dist/ast-layer.cjs ignore "packages/*/legacy/**" --note "kept to compare"
 node plugin/dist/ast-layer.cjs stats --since 7d
 ```
 
@@ -237,6 +264,6 @@ For the same code, `report.json`, `index.json`, `similar.json` and `REPORT.md` a
 
 ```bash
 npm ci
-npm test        # 62 tests: fixtures, determinism, read-only, incremental, hooks, rules, decisions, PR mode, codemods, CSS/i18n, stats, security, MCP server over stdio
+npm test        # 67 tests: fixtures, determinism, read-only, incremental, hooks, rules, decisions, PR mode, codemods, CSS/i18n, stats, ignored paths, the launcher, security, MCP server over stdio (started through the launcher)
 npm run build   # rebuilds plugin/dist/ast-layer.cjs and THIRD_PARTY_LICENSES.txt
 ```

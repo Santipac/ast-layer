@@ -18,16 +18,23 @@ const Decision = z.object({
   about: z.string().optional(),
   recordedAt: z.string().optional(),
 });
-const DecisionsFile = z.object({ version: z.literal(1), decisions: z.array(Decision) });
+// Path patterns left out of the scan and the post-edit hook (see ignore.js).
+// Optional, so a file written by this version still parses in older ones.
+const Ignore = z.object({
+  glob: z.string().min(1).max(300),
+  note: z.string().optional(),
+  recordedAt: z.string().optional(),
+});
+const DecisionsFile = z.object({ version: z.literal(1), decisions: z.array(Decision), ignore: z.array(Ignore).max(200).optional() });
 
 /** Parse a decisions file. Never throws; a malformed file yields no decisions and a problem. */
 export function parseDecisions(text, where, scope) {
-  if (text === undefined || text === null) return { decisions: [], problems: [] };
+  if (text === undefined || text === null) return { decisions: [], ignore: [], problems: [] };
   let json;
-  try { json = JSON.parse(text); } catch (e) { return { decisions: [], problems: [`${where} is not valid JSON (${e.message}); its decisions were not applied.`] }; }
+  try { json = JSON.parse(text); } catch (e) { return { decisions: [], ignore: [], problems: [`${where} is not valid JSON (${e.message}); its decisions were not applied.`] }; }
   const r = DecisionsFile.safeParse(json);
-  if (!r.success) return { decisions: [], problems: [`${where} does not match the decisions format (${r.error.issues.slice(0, 3).map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`).join("; ")}); its decisions were not applied.`] };
-  return { decisions: r.data.decisions.map((d) => ({ ...d, scope })), problems: [] };
+  if (!r.success) return { decisions: [], ignore: [], problems: [`${where} does not match the decisions format (${r.error.issues.slice(0, 3).map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`).join("; ")}); its decisions were not applied.`] };
+  return { decisions: r.data.decisions.map((d) => ({ ...d, scope })), ignore: (r.data.ignore || []).map((g) => ({ ...g, scope })), problems: [] };
 }
 
 /**

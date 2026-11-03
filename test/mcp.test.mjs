@@ -9,17 +9,18 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const BUNDLE = path.join(here, "..", "plugin", "dist", "ast-layer.cjs");
+// Started the way plugin/.mcp.json starts it, with no node on the PATH.
+const LAUNCHER = path.join(here, "..", "plugin", "bin", "ast-layer");
 
 test("MCP server: list tools, scan, query, find_equivalent", async () => {
   const proj = fs.mkdtempSync(path.join(os.tmpdir(), "al-mcp-"));
   fs.cpSync(path.join(here, "fixtures", "acme"), path.join(proj, "acme"), { recursive: true });
   const root = path.join(proj, "acme");
   const client = new Client({ name: "test", version: "0" });
-  await client.connect(new StdioClientTransport({ command: process.execPath, args: [BUNDLE, "mcp"], env: { ...process.env, AST_LAYER_PROJECT: root, AST_LAYER_OUT: ".ast-layer" } }));
+  await client.connect(new StdioClientTransport({ command: "/bin/sh", args: [LAUNCHER, "mcp"], env: { ...process.env, PATH: "/usr/bin:/bin", AST_LAYER_NODE: process.execPath, AST_LAYER_PROJECT: root, AST_LAYER_OUT: ".ast-layer" } }));
   try {
     const { tools } = await client.listTools();
-    assert.deepEqual(tools.map((t) => t.name).sort(), ["find_equivalent", "finding", "findings", "package_graph", "pr_findings", "propose_fix", "record_decision", "scan", "search_names", "stats"]);
+    assert.deepEqual(tools.map((t) => t.name).sort(), ["find_equivalent", "finding", "findings", "package_graph", "pr_findings", "propose_fix", "record_decision", "record_ignore", "scan", "search_names", "stats"]);
     const scan = JSON.parse((await client.callTool({ name: "scan", arguments: {} })).content[0].text);
     assert.equal(scan.summary.byClass.provable, 3);
     assert.equal(scan.incremental.reusedFiles, 0);

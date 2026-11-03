@@ -5,7 +5,7 @@ import path from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { runScan, filterFindings, staleFiles, similarOptions, recordDecision } from "./cli.js";
+import { runScan, filterFindings, staleFiles, similarOptions, recordDecision, recordIgnore } from "./cli.js";
 import { DECISION_VALUES } from "./decisions.js";
 import { prFindings } from "./pr.js";
 import { proposeFix } from "./fix.js";
@@ -146,6 +146,28 @@ export async function startMcpServer() {
     } catch (e) { return fail(`record_decision failed: ${e.message}`); }
   });
 
+  server.registerTool("record_ignore", {
+    title: "Leave a path pattern out of scans and edit warnings",
+    description: "Only when the user explicitly asks to stop analyzing or warning about some files that copy code on purpose (parity tests, fixtures, generated code, vendored code). Records the pattern once in ast-layer.decisions.json (scope repo, shared through git) or in the plugin data dir (scope user); from then on the scan leaves those files out and the post-edit hook does not compare them. A pattern without \"/\" matches the file name in any directory (\"*.parity.test.*\"); one with \"/\" matches the path from the repository root (\"packages/legacy/**\"). *.parity.test.* and *.parity.spec.* are already left out. Never call it on your own initiative.",
+    inputSchema: {
+      glob: z.string().describe("Path pattern: ** crosses directories, * stays within one"),
+      note: z.string().optional().describe("Why, in the user's words"),
+      scope: z.enum(["repo", "user"]).optional(),
+      root: z.string().optional().describe("Root label from the last scan when it covered several roots; default: the workspace"),
+    },
+  }, async ({ glob, note, scope, root }) => {
+    try {
+      let rootAbs = projectDir();
+      if (root) {
+        const m = (load().meta.roots || []).find((r) => r.label === root);
+        if (!m) return fail(`record_ignore failed: no root labeled ${root} in the last scan`);
+        rootAbs = m.abs;
+      }
+      const r = recordIgnore({ rootAbs, glob, note: note || "", scope: scope || "repo" });
+      return json({ recorded: r.entry, file: r.file, scope: r.scope, matchesNow: r.matches, examples: r.examples, note: `${r.matches ? "" : "The pattern matches no file now; check it with the user. "}Edit warnings leave these files out from now on; the next scan leaves them out of the findings.${r.scope === "repo" ? " The decisions file is in the repository: it goes into git with the user's next commit." : ""}` });
+    } catch (e) { return fail(`record_ignore failed: ${e.message}`); }
+  });
+
   server.registerTool("propose_fix", {
     title: "Verified fix for a provable finding",
     description: "For a provable duplicate.reinvents-library-export or boundary.bypasses-package-entry finding: computes the change (delete the local copy and import or re-export the library's; or point the import at the package entry) and verifies it in memory: no new TypeScript diagnostics in the edited files and their importers, and the finding disappears without creating another (a finding about the same code that only got smaller, such as a module copy going from 4 of 4 to 3 of 4 matching definitions, is listed in shrunkFindings and does not count). Returns a unified diff, exact oldString/newString edits and `verified`. Never writes. Apply the edits with Edit only if verified is true; otherwise report why and do not apply.",
@@ -162,7 +184,7 @@ export async function startMcpServer() {
 
   server.registerTool("stats", {
     title: "Local hook telemetry",
-    description: "What the plugin's hooks did on this machine, from the local hook log: sessions, post-edit warnings by type (structural, similar, same-name, architecture-rule), files warned, and whether each warned unit was removed afterwards (warning followed) or kept. Nothing is sent anywhere.",
+    description: "What the plugin's hooks did on this machine, from the local hook log: sessions, post-edit warnings by type (structural, similar, same-name, architecture-rule), files warned, and whether each warned unit was removed afterwards (warning followed), kept, or its file was deleted (counted apart: deleting a scratch file is not following a warning). Post-edit runs skipped because the file is outside the project, a test the scan leaves out, or an ignored path are counted by reason. Nothing is sent anywhere.",
     inputSchema: { since: z.string().optional().describe("7d, 24h, 30m or an ISO date") },
   }, async ({ since }) => {
     try {

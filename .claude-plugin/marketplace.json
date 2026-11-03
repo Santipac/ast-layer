@@ -1,0 +1,23 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "ast-layer",
+  "description": "Deterministic AST facts about JS/TS monorepos and micro-frontends for Claude Code.",
+  "owner": {
+    "name": "Santiago Pacini",
+    "url": "https://github.com/Santipac"
+  },
+  "plugins": [
+    {
+      "name": "ast-layer",
+      "source": "./plugin",
+      "description": "Deterministic, read-only facts about JS/TS code for agents: binding-resolved duplicates, library reinventions, package-boundary bypasses, cycles, version drift and Module Federation contracts, each classified as provable, agent-guided or manual-review.",
+      "version": "1.3.0",
+      "author": { "name": "Santiago Pacini", "url": "https://github.com/Santipac" },
+      "homepage": "https://github.com/Santipac/ast-layer",
+      "repository": "https://github.com/Santipac/ast-layer",
+      "license": "MIT",
+      "category": "development",
+      "keywords": ["ast", "monorepo", "micro-frontends", "module-federation", "duplication", "architecture", "typescript"]
+    }
+  ]
+}

@@ -13,7 +13,7 @@ import { DECISIONS_FILE, parseDecisions, applyDecisions } from "./decisions.js";
 import { parseStyle, flattenMessages, localeLanguage } from "./assets.js";
 import { CONVENTIONAL_NAMES } from "./lookup.js";
 
-export const TOOL = { name: "ast-layer", version: "1.2.1", schema: 2 };
+export const TOOL = { name: "ast-layer", version: "1.3.0", schema: 2 };
 const K = ts.SyntaxKind;
 const CLASS_ORDER = { provable: 0, "agent-guided": 1, "manual-review": 2 };
 const hash = (s) => crypto.createHash("sha1").update(s).digest("hex").slice(0, 12);

@@ -1,5 +1,5 @@
 node_modules/
-plugin/dist/
 .DS_Store
 *.zip
 release/
+.ast-layer/

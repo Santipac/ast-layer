@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.3.0
+
+Less noise from files that copy code on purpose, honest `stats`, and no dependency on `node` being on the PATH. Prompted by a measurement on 8 micro-frontends, where almost every post-edit warning came from parity tests and scratch files, and the MCP server did not connect because the session had no `node` on its PATH.
+
+- **The post-edit hook skips files the index does not cover.**
+  - Files outside the analyzed roots (scratch files in a temp directory) are not compared, and no scan starts for them.
+  - While the scan leaves tests out (the default), the hook does not compare test files either, so the hook and the index agree.
+  - `*.parity.test.*` and `*.parity.spec.*` are always left out, also from scans with `--include-tests`.
+  - Every skipped run is still logged, with its reason.
+- **Ignore a path pattern once.** New MCP tool `record_ignore` and CLI command `ast-layer ignore <glob> [--note] [--scope repo|user]`, only when the user asks. The pattern goes into `ast-layer.decisions.json` (or the user file) under `ignore`, and from then on scans and the post-edit hook leave those files out. The answer says how many files the pattern matches now. Older versions read the same file and ignore the new field. Recording a decision keeps the ignore list, and the other way around. Post-edit warnings end by saying this is possible, so the agent can offer it instead of the user answering the same warning on every edit.
+- **`stats` tells a deleted file apart from a followed warning.** A warned unit whose file no longer exists is now "file deleted", not "warning followed": scratch files and throwaway tests get deleted whether or not the warning was read. Warnings about files outside the project logged by earlier versions are counted apart and left out of the outcomes, and skipped post-edit runs are counted by reason. On the measurement's hook logs, the 10 "followed" warnings were all deleted files.
+- **The MCP server and the hooks start through `plugin/bin/ast-layer`**, a POSIX `sh` launcher run as `/bin/sh`, instead of `node` from the PATH. It finds Node.js 18+ in `AST_LAYER_NODE`, the PATH, the path it found last time (cached in the plugin data dir), Homebrew and the usual version managers (volta, mise, asdf, nodenv, fnm, n, nvm), and finally the user's login and interactive shell. Without Node, the MCP server says how to set `AST_LAYER_NODE` and the hooks stay silent. Windows needs WSL.
+- **Publishing:** the repository is its own marketplace (`.claude-plugin/marketplace.json`), the bundle in `plugin/dist/` is committed so the plugin installs straight from GitHub, and CI (Linux and macOS, Node 18 and 22) checks that the committed bundle matches the sources, runs the tests and checks that every manifest has the same version.
+
 ## 1.2.1
 
 Security review before publishing the repository.

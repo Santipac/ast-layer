@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        node: [18, 22]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      # The plugin is installed straight from the repository, so the committed
+      # bundle must be exactly what the sources build.
+      - name: Committed bundle matches the sources
+        if: matrix.node == 22 && matrix.os == 'ubuntu-latest'
+        run: git diff --exit-code -- plugin/dist
+      - run: npm test
+      - name: Versions agree
+        if: matrix.node == 22 && matrix.os == 'ubuntu-latest'
+        run: node scripts/check-versions.mjs

@@ -1,0 +1,77 @@
+#!/bin/sh
+# Runs the ast-layer bundle with a Node.js 18+ that it finds itself, so the MCP
+# server and the hooks do not depend on `node` being on the PATH of whoever
+# launched Claude Code (a Claude Code started from the Dock, an IDE or a
+# service often does not see the node that nvm, fnm, volta, asdf or mise set
+# up in the shell's rc files).
+#
+# Order: $AST_LAYER_NODE, the PATH, the path found last time (cached in the
+# plugin data dir), common install locations, and finally the user's login and
+# interactive shell. Hooks never fail the session: without Node they exit 0.
+here=$(cd "$(dirname "$0")" && pwd)
+bundle="$here/../dist/ast-layer.cjs"
+
+case "$1" in hook-*) is_hook=1 ;; *) is_hook=0 ;; esac
+
+cache=""
+case "${CLAUDE_PLUGIN_DATA:-}" in
+  "" | *'${'*) ;;
+  *) cache="$CLAUDE_PLUGIN_DATA/node-path" ;;
+esac
+
+# A usable node: executable and version 18 or later.
+usable() {
+  [ -n "$1" ] && [ -x "$1" ] && [ ! -d "$1" ] &&
+    "$1" -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 18 ? 0 : 1)' >/dev/null 2>&1
+}
+
+found=""
+consider() { [ -z "$found" ] && usable "$1" && found="$1"; return 0; }
+
+consider "${AST_LAYER_NODE:-}"
+consider "$(command -v node 2>/dev/null)"
+if [ -z "$found" ] && [ -n "$cache" ] && [ -r "$cache" ]; then
+  # The cached path was checked when it was written; re-checking only that it
+  # still exists keeps every hook run from starting an extra node.
+  c=$(cat "$cache" 2>/dev/null)
+  [ -n "$c" ] && [ -x "$c" ] && found="$c"
+fi
+for p in \
+  /opt/homebrew/bin/node /usr/local/bin/node /usr/bin/node /opt/local/bin/node \
+  "$HOME/.volta/bin/node" \
+  "$HOME/.local/share/mise/shims/node" "$HOME/.asdf/shims/node" "$HOME/.nodenv/shims/node" \
+  "${FNM_DIR:-$HOME/.local/share/fnm}/aliases/default/bin/node" \
+  "$HOME/Library/Application Support/fnm/aliases/default/bin/node" \
+  "$HOME/n/bin/node"; do
+  consider "$p"
+done
+if [ -z "$found" ]; then
+  # nvm: newest installed version first.
+  nvm_dir="${NVM_DIR:-$HOME/.nvm}/versions/node"
+  if [ -d "$nvm_dir" ]; then
+    for v in $(ls -1 "$nvm_dir" 2>/dev/null | sed 's/^v//' | sort -t. -k1,1nr -k2,2nr -k3,3nr); do
+      consider "$nvm_dir/v$v/bin/node"
+    done
+  fi
+fi
+if [ -z "$found" ] && [ -n "${SHELL:-}" ] && [ -x "$SHELL" ]; then
+  # Last resort: ask the user's shell, which loads their profile and rc files.
+  consider "$("$SHELL" -lc 'command -v node' </dev/null 2>/dev/null | tail -n 1)"
+  consider "$("$SHELL" -ic 'command -v node' </dev/null 2>/dev/null | tail -n 1)"
+fi
+
+if [ -z "$found" ]; then
+  echo "ast-layer: Node.js 18 or later was not found (looked at AST_LAYER_NODE, PATH, Homebrew, volta, mise, asdf, nodenv, fnm, n, nvm and your shell). Install Node.js, or set AST_LAYER_NODE to its path, for example in the \"env\" of ~/.claude/settings.json." >&2
+  [ "$is_hook" = 1 ] && exit 0
+  exit 1
+fi
+
+if [ -n "$cache" ]; then
+  c=$(cat "$cache" 2>/dev/null)
+  if [ "$c" != "$found" ]; then
+    mkdir -p "$CLAUDE_PLUGIN_DATA" 2>/dev/null && printf '%s\n' "$found" > "$cache.$$" 2>/dev/null && mv -f "$cache.$$" "$cache" 2>/dev/null
+    rm -f "$cache.$$" 2>/dev/null
+  fi
+fi
+
+exec "$found" "$bundle" "$@"

@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "ast-layer": {
-      "command": "node",
-      "args": ["${CLAUDE_PLUGIN_ROOT}/dist/ast-layer.cjs", "mcp"],
+      "command": "/bin/sh",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/bin/ast-layer", "mcp"],
       "env": { "AST_LAYER_PROJECT": "${CLAUDE_PROJECT_DIR}" }
     }
   }
